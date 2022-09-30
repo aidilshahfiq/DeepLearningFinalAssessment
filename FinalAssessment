@@ -1,0 +1,583 @@
+### Q1 ###
+
+'''a) 
+
+ANSWER: YOUR ANSWER HERE (nn.CrossEntropyLoss -- It is because the situation for this case is binary 
+classification task which it can creating confident models with higher probability and accurate prediction. 
+The case also in between two probability distributions for a provided set of occurrences which make this loss function suitable.)'''
+
+
+# b)
+
+import torch, torchvision
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+import time
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+import cv2
+import glob
+import numpy
+import random
+
+from PIL import Image
+from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
+from torchvision import datasets, models, transforms
+from torchsummary import summary
+
+#1
+
+transform = transforms.Compose(
+    [transforms.ToTensor(), 
+     transforms.Resize(100),
+     transforms.Lambda(lambda x: x.repeat(3, 1, 1,) if x.size(0)==1 else x),
+     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+
+batch_size = 16
+
+
+trainset = torchvision.datasets.FashionMNIST(root='./data', train=True,
+                                        download=True, transform=transform)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size,
+                                          shuffle=True, num_workers=2)
+
+testset = torchvision.datasets.FashionMNIST(root='./data', train=False,
+                                       download=True, transform=transform)
+testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size,
+                                         shuffle=False, num_workers=2)
+
+classes = ('T-shirt', 'trouser', 'pullover', 'dress',
+       'coat', 'sandal', 'shirt', 'sneaker', 'boot', 'ankle boot')
+
+train_data_size = len(trainloader.dataset)
+test_data_size = len(testloader.dataset)
+
+print(train_data_size)
+print(test_data_size)
+
+
+def batchnorm(X, gamma, beta):
+
+    N, C, H, W = list(X.size())
+    mean = torch.mean(X, dim=(0, 2, 3))
+    variance = torch.mean((X - mean.reshape((1, C, 1, 1))) ** 2, dim=(0, 2, 3))
+    X_hat = (X - mean.reshape((1, C, 1, 1))) * 1.0 / torch.sqrt(variance.reshape((1, C, 1, 1)) )
+    out = gamma.reshape((1, C, 1, 1)) * X_hat + beta.reshape((1, C, 1, 1))
+
+    return out
+
+ #2
+
+class CNN(nn.Module):
+    def __init__(self):
+        super(CNN, self).__init__()
+        self.conv1 = nn.Conv2d(3, 64, 3)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.batchnorm = nn.BatchNorm2d(6),
+        self.conv2 = nn.Conv2d(64, 128, 3)
+        self.conv3 = nn.Conv2d(128, 256, 3)
+        self.conv4 = nn.Conv2d(256, 512, 3)
+        self.fc1 = nn.Linear(32 * 7 * 7, 4096)
+        self.fc2 = nn.Linear(4096, 1000)
+        self.fc3 = nn.Linear(1000, 10)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x = self.pool(self.relu(self.conv1(x)))
+        x = self.pool(self.relu(self.conv2(x)))
+        x = self.pool(self.relu(self.conv3(x)))
+        x = self.pool(self.relu(self.conv4(x)))
+        x = x.view(-1, 32 * 4 * 4)
+        x = self.relu(self.fc1(x))
+        x = self.relu(self.fc2(x))
+        nn.Dropout(0.5)
+        x = self.fc3(x)
+        return x
+
+model = CNN()
+
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+model.to(device)
+
+#3
+
+import time
+
+def train_and_validate(model, loss_criterion, optimizer, epochs=25):  
+    start = time.time()
+    history = []
+    best_acc = 0.0
+
+    for epoch in range(epochs):
+        epoch_start = time.time()
+        print("Epoch: {}/{}".format(epoch+1, epochs))
+        model.train()
+        
+        train_loss = 0.0
+        train_acc = 0.0
+        
+        valid_loss = 0.0
+        valid_acc = 0.0
+        
+        for i, (inputs, labels) in enumerate(trainloader):
+
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+            
+            optimizer.zero_grad()
+            
+            outputs = model(inputs)
+            
+            loss = loss_criterion(outputs, labels)
+            
+            loss.backward()
+            
+            optimizer.step()
+            
+            train_loss += loss.item() * inputs.size(0)
+            
+            ret, predictions = torch.max(outputs.data, 1)
+            correct_counts = predictions.eq(labels.data.view_as(predictions))
+            
+            acc = torch.mean(correct_counts.type(torch.FloatTensor))
+            
+            train_acc += acc.item() * inputs.size(0)
+            
+        with torch.no_grad():
+
+            model.eval()
+
+            for j, (inputs, labels) in enumerate(testloader):
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+
+                outputs = model(inputs)
+
+                loss = loss_criterion(outputs, labels)
+
+                valid_loss += loss.item() * inputs.size(0)
+
+                ret, predictions = torch.max(outputs.data, 1)
+                correct_counts = predictions.eq(labels.data.view_as(predictions))
+
+                acc = torch.mean(correct_counts.type(torch.FloatTensor))
+
+                valid_acc += acc.item() * inputs.size(0)
+
+                
+        avg_train_loss = train_loss/train_data_size 
+        avg_train_acc = train_acc/train_data_size
+
+        avg_test_loss = valid_loss/test_data_size 
+        avg_test_acc = valid_acc/test_data_size
+
+        history.append([avg_train_loss, avg_test_loss, avg_train_acc, avg_test_acc])
+                
+        epoch_end = time.time()
+    
+        print("Epoch : {:03d}, Training: Loss: {:.4f}, Accuracy: {:.4f}%, \n\t\tValidation : Loss : {:.4f}, Accuracy: {:.4f}%, Time: {:.4f}s".format(epoch, avg_train_loss, avg_train_acc*100, avg_test_loss, avg_test_acc*100, epoch_end-epoch_start))
+        
+        torch.save(model, 'FashionMNIST_model_'+str(epoch)+'.pt')
+            
+    return model, history
+
+#4
+num_epochs = 10
+trained_model, history = train_and_validate(model, criterion, optimizer, num_epochs)
+
+
+
+# c)
+
+###############################################
+###############YOUR CODES HERE ################
+###############################################
+
+# Applying Transforms to the Data
+import torchvision
+import torchvision.transforms as transforms
+
+image_transforms = {
+    'train': transforms.Compose([
+        transforms.RandomResizedCrop(size=256, scale=(0.8, 1.0)),
+        transforms.RandomRotation(degrees=15),
+        transforms.RandomHorizontalFlip(),
+        transforms.CenterCrop(size=224),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406],
+                             [0.229, 0.224, 0.225])
+    ]),
+    'test': transforms.Compose([
+        transforms.Resize(size=256),
+        transforms.CenterCrop(size=224),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406],
+                             [0.229, 0.224, 0.225])
+    ])
+}
+
+dataset = './fashion_dataset'
+
+train_directory = os.path.join(dataset, 'train')
+test_directory = os.path.join(dataset, 'validation')
+
+batchSize = 32
+
+num_classes = len(os.listdir(train_directory))
+print(num_classes)
+
+data = {
+    'train': datasets.ImageFolder(root=train_directory, transform=image_transforms['train']),
+
+    'test': datasets.ImageFolder(root=test_directory, transform=image_transforms['test'])
+}
+
+data['train']
+
+train_data_size = len(data['train'])
+test_data_size = len(data['test'])
+
+train_data_loader = DataLoader(data['train'], batch_size=batchSize, shuffle=True)
+test_data_loader = DataLoader(data['test'], batch_size=batchSize, shuffle=True)
+
+train_data_size, test_data_size
+input_size = (3,32,32)
+
+from torch.utils.data import DataLoader
+trainloader = DataLoader(dataset=data['train'], 
+                                     batch_size=4, 
+                                     num_workers=0, 
+                                     shuffle=True) 
+
+testloader = DataLoader(dataset=data['test'], 
+                                    batch_size=4, 
+                                    num_workers=0, 
+                                    shuffle=False) 
+
+train_data_size = len(trainloader.dataset)
+test_data_size = len(testloader.dataset)
+
+model_ft = models.resnet18(pretrained=True)
+num_ftrs = model_ft.fc.in_features
+
+model_ft.fc = nn.Linear(num_ftrs, 10)
+
+
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
+
+
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+model_ft.to(device)
+
+
+''' d)
+Two model-centric techniques that I propose are: 1) Use latest version of model eg resnet50 etc. 2) Increase learning rate value. '''
+
+
+# e)
+
+###############################################
+###############YOUR CODES HERE ################
+###############################################
+
+# Applying Transforms to the Data
+import torchvision
+import torchvision.transforms as transforms
+
+image_transforms = {
+    'train': transforms.Compose([
+        transforms.RandomResizedCrop(size=256, scale=(0.8, 1.0)),
+        transforms.RandomRotation(degrees=15),
+        transforms.RandomHorizontalFlip(),
+        transforms.CenterCrop(size=224),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406],
+                             [0.229, 0.224, 0.225])
+    ]),
+    'test': transforms.Compose([
+        transforms.Resize(size=256),
+        transforms.CenterCrop(size=224),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406],
+                             [0.229, 0.224, 0.225])
+    ])
+}
+
+dataset = './fashion_dataset'
+
+train_directory = os.path.join(dataset, 'train')
+test_directory = os.path.join(dataset, 'validation')
+
+batchSize = 32
+
+num_classes = len(os.listdir(train_directory))
+print(num_classes)
+
+data = {
+    'train': datasets.ImageFolder(root=train_directory, transform=image_transforms['train']),
+
+    'test': datasets.ImageFolder(root=test_directory, transform=image_transforms['test'])
+}
+
+data['train']
+
+train_data_size = len(data['train'])
+test_data_size = len(data['test'])
+
+train_data_loader = DataLoader(data['train'], batch_size=batchSize, shuffle=True)
+test_data_loader = DataLoader(data['test'], batch_size=batchSize, shuffle=True)
+
+train_data_size, test_data_size
+input_size = (3,32,32)
+
+from torch.utils.data import DataLoader
+trainloader = DataLoader(dataset=data['train'], 
+                                     batch_size=4, 
+                                     num_workers=0, 
+                                     shuffle=True) 
+
+testloader = DataLoader(dataset=data['test'], 
+                                    batch_size=4, 
+                                    num_workers=0, 
+                                    shuffle=False) 
+
+train_data_size = len(trainloader.dataset)
+test_data_size = len(testloader.dataset)
+
+model_ft = models.resnet50(pretrained=True)
+num_ftrs = model_ft.fc.in_features
+
+model_ft.fc = nn.Linear(num_ftrs, 10)
+
+
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.SGD(model_ft.parameters(), lr=0.0001, momentum=0.9)
+
+
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+model_ft.to(device)
+
+
+''' f)
+Your answer here YES! Latest version of model provide better method of training and validation which improve accuracy. 
+Reduce learning rate make the AI increase time to learn the data the train data thus improve accuracy. '''
+
+''' g) 
+- Use pre-trained models and cloud APIs. The advantage of using pretrained models or APIs is ease of use, faster evaluation, and savings in time and resources.
+- Establish a strong baseline model. The choice of the baseline model is influenced by the particular application, the kind of dataset, and the business domain.
+'''
+
+
+#h
+
+import torchvision
+import torchvision.transforms as transforms
+from torch.utils.data import Dataset, DataLoader
+import cv2
+import glob
+import numpy
+import random
+from pandas.core.common import flatten
+from PIL import Image
+%matplotlib inline
+import matplotlib.pyplot as plt
+
+train_data_path = '/content/drive/MyDrive/fashion_dataset/train' 
+test_data_path = '/content/drive/MyDrive/fashion_dataset/validation'
+
+train_image_paths = [] 
+classes = [] 
+
+
+
+for data_path in glob.glob(train_data_path + '/*'):
+    classes.append(data_path.split('\\')[-1]) 
+    train_image_paths.append(glob.glob(data_path + '/*'))
+    
+train_image_paths = list(flatten(train_image_paths))
+random.shuffle(train_image_paths)
+
+print('train_image_path example: ', train_image_paths[0])
+print('class example: ', classes[0])
+
+test_image_paths = []
+
+for data_path in glob.glob(test_data_path + '/*'):
+    test_image_paths.append(glob.glob(data_path + '/*'))
+
+test_image_paths = list(flatten(test_image_paths))
+
+print("Train size: {}\nTest size: {}".format(len(train_image_paths), len(test_image_paths)))
+
+idx_to_class = {i:j for i, j in enumerate(classes)}
+class_to_idx = {value:key for key,value in idx_to_class.items()}
+class_to_idx
+
+from torch.utils.data import Dataset
+
+
+# Define Dataset Class
+
+
+class fruitDataset(Dataset):
+    def __init__(self, image_paths, transform=False):
+        self.image_paths = image_paths
+        self.transform = transform
+        
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        image_filepath = self.image_paths[idx]
+
+        image = Image.open(image_filepath) 
+        
+        label = image_filepath.split('\\')[-2]
+        label = class_to_idx[label]
+        if self.transform is not None:
+            image = self.transform(image) 
+        
+        return image, label
+
+train_dataset = fruitDataset(train_image_paths,image_transforms['train'])
+test_dataset = fruitDataset(test_image_paths,image_transforms['test'])
+train_dataset.transform
+
+from torch.utils.data import DataLoader
+trainloader = DataLoader(dataset=train_dataset, 
+                                     batch_size=4, 
+                                     num_workers=0, 
+                                     shuffle=True) 
+
+testloader = DataLoader(dataset=test_dataset, 
+                                    batch_size=4, 
+                                    num_workers=0, 
+                                    shuffle=False) 
+
+train_data_size = len(trainloader.dataset)
+test_data_size = len(testloader.dataset)
+
+model = models.resnet18(pretrained=True)
+num_ftrs = model.fc.in_features
+model.fc = nn.Linear(num_ftrs, 10)
+
+# 2. LOSS AND OPTIMIZER
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+
+# 3. move the model to GPU
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+model.to(device)
+
+import time 
+
+def train_and_validate(model, loss_criterion, optimizer, epochs=25):
+    
+    start = time.time()
+    history = []
+    best_acc = 0.0
+
+    for epoch in range(epochs):
+        epoch_start = time.time()
+        print("Epoch: {}/{}".format(epoch+1, epochs))
+        
+        model.train()
+        
+        train_loss = 0.0
+        train_acc = 0.0
+        
+        valid_loss = 0.0
+        valid_acc = 0.0
+        
+        for i, (inputs, labels) in enumerate(trainloader):
+
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+            
+            optimizer.zero_grad()
+            
+            outputs = model(inputs)
+            
+            loss = loss_criterion(outputs, labels)
+            
+            loss.backward()
+            
+            optimizer.step()
+            
+            train_loss += loss.item() * inputs.size(0)
+            
+            ret, predictions = torch.max(outputs.data, 1)
+            correct_counts = predictions.eq(labels.data.view_as(predictions))
+            
+            acc = torch.mean(correct_counts.type(torch.FloatTensor))
+            
+            train_acc += acc.item() * inputs.size(0)
+          
+        with torch.no_grad():
+
+            model.eval()
+
+            for j, (inputs, labels) in enumerate(testloader):
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+
+                outputs = model(inputs)
+
+                loss = loss_criterion(outputs, labels)
+
+                valid_loss += loss.item() * inputs.size(0)
+
+                ret, predictions = torch.max(outputs.data, 1)
+                correct_counts = predictions.eq(labels.data.view_as(predictions))
+
+                acc = torch.mean(correct_counts.type(torch.FloatTensor))
+
+                valid_acc += acc.item() * inputs.size(0)
+            
+        avg_train_loss = train_loss/train_data_size 
+        avg_train_acc = train_acc/train_data_size
+
+        avg_test_loss = valid_loss/test_data_size 
+        avg_test_acc = valid_acc/test_data_size
+
+        history.append([avg_train_loss, avg_test_loss, avg_train_acc, avg_test_acc])
+                
+        epoch_end = time.time()
+    
+        print("Epoch : {:03d}, Training: Loss: {:.4f}, Accuracy: {:.4f}%, \n\t\tValidation : Loss : {:.4f}, Accuracy: {:.4f}%, Time: {:.4f}s".format(epoch, avg_train_loss, avg_train_acc*100, avg_test_loss, avg_test_acc*100, epoch_end-epoch_start))
+        
+        torch.save(model, 'cifar10_model_'+str(epoch)+'.pt')
+            
+    return model, history
+
+num_epochs = 10
+trained_model, history = train_and_validate(model, criterion, optimizer, num_epochs)
+
+
+### Q2 ###
+
+!git clone https://github.com/ultralytics/yolov5.git # clone
+%cd yolov5
+%pip install -r requirements.txt # install
+
+import torch
+import utils
+
+
+!pip install roboflow
+
+from roboflow import Roboflow
+rf = Roboflow(api_key="nDZsiOozPfJzL2441TRb")
+project = rf.workspace("aidil-shahfiq-0mh5x").project("assessment-cnoxe")
+dataset = project.version(1).download("yolov5")
+
+!python segment/train.py --img 320 --batch 128 --epochs 100 --data {dataset.location}/data.yaml --weights yolov5s-seg.pt
+!python segment/val.py --weights runs/train-seg/exp/weights/AidilShahfiq.pt --data {dataset.location}/data.yaml --img 320
+
